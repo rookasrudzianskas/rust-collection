@@ -3,14 +3,34 @@ mod args;
 use args::Args;
 use image::{
     imageops::FilterType::Triangle, io::Reader, DynamicImage, GenericImageView, ImageFormat,
+    ImageError
 };
+
+use std::convert::TryInto;
+
+#[derive(Debug)]
+enum ImageDataErrors {
+    BufferTooSmall,
+    DifferentImageFormats,
+    UnableToReadFromPath(std::io::Error),
+    UnableToFormatImage(String),
+    UnableToDecodeImage(ImageError),
+    UnableToSaveImage(ImageError)
+}
+
+struct FloatingImage {
+    width: u32,
+    height: u32,
+    data: Vec<u8>,
+    name: String,
+}
 
 fn main() -> Result<(), ImageDataErrors> {
     let args = Args::new();
     println!("{:?}", args);
 
-    let (image_1, image_1_format) = find_image_from_path(args.image_1);
-    let (image_2, image_2_format) = find_image_from_path(args.image_2);
+    let (image_1, image_1_format) = find_image_from_path(args.image_1)?;
+    let (image_2, image_2_format) = find_image_from_path(args.image_2)?;
 
     if image_1_format != image_2_format {
         return Err(ImageDataErrors::DifferentImageFormats);
@@ -23,31 +43,20 @@ fn main() -> Result<(), ImageDataErrors> {
 
     output.set_data(combined_data)?;
 
-    image::save_buffer_with_format(
+    if let Err(e) = image::save_buffer_with_format(
         output.name,
         &output.data,
         output.width,
         output.height,
         image::ColorType::Rgba8,
         image_1_format,
-    )
-        .unwrap();
-    Ok(())
+    ) {
+        Err(ImageDataErrors::UnableToSaveImage(e))
+    } else {
+        Ok(())
+    }
 }
 
-#[derive(Debug)]
-enum ImageDataErrors {
-    BufferTooSmall,
-    DifferentImageFormats,
-    UnableToReadFromPath
-}
-
-struct FloatingImage {
-    width: u32,
-    height: u32,
-    data: Vec<u8>,
-    name: String,
-}
 
 impl FloatingImage {
     fn new(width: u32, height: u32, name: String) -> Self {
@@ -69,16 +78,20 @@ impl FloatingImage {
     }
 }
 
-fn find_image_from_path(path: String) -> (DynamicImage, ImageFormat) {
-    match Reader::open(path) {
+fn find_image_from_path(path: String) -> Result<(DynamicImage, ImageFormat), ImageDataErrors> {
+    match Reader::open(&path) {
         Ok(image_reader) => {
-
+            if let Some(image_format) = image_reader.format() {
+                match image_reader.decode() {
+                    Ok(image) => Ok((image, image_format)),
+                    Err(e) => Err(ImageDataErrors::UnableToDecodeImage(e))
+                }
+            } else {
+                return Err(ImageDataErrors::UnableToFormatImage(path));
+            }
         },
         Err(e) => Err(ImageDataErrors::UnableToReadFromPath(e)),
     }
-    let image_format = image_reader.format().unwrap();
-    let image = image_reader.decode().unwrap();
-    (image, image_format)
 }
 
 fn standardise_size(image_1: DynamicImage, image_2: DynamicImage) -> (DynamicImage, DynamicImage) {
